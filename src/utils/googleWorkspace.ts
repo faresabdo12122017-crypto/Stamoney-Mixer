@@ -255,18 +255,34 @@ export async function sendLyricsMail(track: Track, token: string, recipientEmail
 
 // 6. Google Keep Note backup
 export async function saveToGoogleKeep(track: Track, token: string): Promise<string> {
-  // consumer accounts do not allow standard direct API calls to Keep because they are restricted.
-  // We elegantly export to a special light document note inside Google Drive under folder "Stamoni Keep" or directly format a beautiful Keep card with deep linking to Keep web!
+  return exportTrackToGoogleKeep(track, token);
+}
+
+// 6a. Organized detailed Note exporter with BPM, vocal style, rhythm, and lyric lines
+export async function exportTrackToGoogleKeep(track: Track, token: string): Promise<string> {
   const noteTitle = `حفظ بـ Keep / تدوينة روقان: ${track.title}`;
-  const notesText = `- النمط: ${track.vocalStyleCategory}\n- سرعة الإيقاع: ${track.bpm} BPM\n\nالكلمات:\n` + track.lines.map(l => `[${l.section}] ${l.text}`).join("\n");
+  
+  const linesMarkdown = track.lines.map((l, i) => {
+    return `${i + 1}. [${l.section}] (${l.vocalEffect || "تأثير شعبي"}) ${l.text}\n   🗣️ مخارج الحروف: ${l.pronunciation || "شعبي"}`;
+  }).join("\n\n");
+
+  const notesText = `=== 👑 تدوينة استوديو المايسترو ستاموني المطور ===\n\n` +
+    `🎵 اسم المهرجان: ${track.title}\n` +
+    `⚡ النبض والسرعة: ${track.bpm} BPM\n` +
+    `🎤 طبقة ونوع الصوت: ${track.vocalStyleCategory || "مهرجانات شعبية"}\n` +
+    `🔊 مؤثر صوت الميكساج: ${track.vocalStyle || "تأثير ستاموني الأسطوري"}\n` +
+    `📅 تاريخ الجلسة الإبداعية: ${new Date().toLocaleString("ar-EG")}\n` +
+    `===============================================\n\n` +
+    `📝 كلمات الأغنية الكاملة والتوزيع الصوتي المباشر:\n\n` +
+    linesMarkdown;
 
   const metadata = {
     name: noteTitle,
     mimeType: "text/plain",
-    description: "Sitamoni Saved Keep Memo Note"
+    description: "Sitamoni Saved Keep Memo Note with Organized Session Metadata"
   };
 
-  const boundary = "keep_sim_boundary";
+  const boundary = "keep_sim_boundary_new";
   const multipartBody = [
     `--${boundary}`,
     "Content-Type: application/json; charset=UTF-8",
@@ -289,7 +305,8 @@ export async function saveToGoogleKeep(track: Track, token: string): Promise<str
   });
 
   if (!res.ok) {
-    throw new Error("تعذر حفظ مذكرة الكلمات السريعة.");
+    const errorText = await res.text();
+    throw new Error(`تعذر حفظ مذكرة الاستوديو المنظمة بـ Keep: ${errorText}`);
   }
 
   return "https://keep.google.com";

@@ -24,7 +24,10 @@ import {
   Share2,
   Clipboard,
   Check,
-  SendHorizontal
+  SendHorizontal,
+  Bookmark,
+  Trash2,
+  FolderOpen
 } from "lucide-react";
 import { Track, TrackLine, MixerSettings, VocalStyleCategory } from "./types";
 import { SitamoniAudioEngine } from "./utils/audioEngine";
@@ -42,7 +45,7 @@ import {
   toggleCloudFavorite 
 } from "./utils/firebaseService";
 import { GoogleProductionHub } from "./components/GoogleProductionHub";
-import { GoogleContactInfo } from "./utils/googleWorkspace";
+import { GoogleContactInfo, saveToGoogleKeep, exportTrackToGoogleKeep, listDriveKeepMemos, fetchDriveKeepContent, deleteDriveKeepMemo } from "./utils/googleWorkspace";
 
 
 // Utility to parse and display bracket directions stylishly
@@ -125,6 +128,12 @@ export default function App() {
   // Google Workspace & Firebase Cloud OAuth State Integration (PRO System)
   const [googleToken, setGoogleToken] = useState<string | null>(null);
   const [googleContacts, setGoogleContacts] = useState<GoogleContactInfo[]>([]);
+  const [isSavingKeep, setIsSavingKeep] = useState<boolean>(false);
+  const [keepSyncStatus, setKeepSyncStatus] = useState<"idle" | "saving" | "synced" | "error">("idle");
+  const [keepNotesList, setKeepNotesList] = useState<any[]>([]);
+  const [isLoadingKeep, setIsLoadingKeep] = useState<boolean>(false);
+  const [activeNoteContent, setActiveNoteContent] = useState<string | null>(null);
+  const [activeNoteId, setActiveNoteId] = useState<string | null>(null);
 
 
   // Share system states
@@ -217,6 +226,15 @@ export default function App() {
     );
     return () => unsubscribe();
   }, []);
+
+  // Sync Google Keep drafts when token is available or logged in
+  useEffect(() => {
+    if (googleToken) {
+      fetchUserKeepNotes(googleToken);
+    } else {
+      setKeepNotesList([]);
+    }
+  }, [googleToken]);
 
   // --- Initialise Audio Client & URL Parsing ---
   useEffect(() => {
@@ -516,6 +534,84 @@ export default function App() {
     } catch (e: any) {
       setAuthError(e.message || "فشل تسجيل الدخول بواسطة غوغل السحابي.");
       console.error(e);
+    }
+  };
+
+  const fetchUserKeepNotes = async (token: string) => {
+    setIsLoadingKeep(true);
+    try {
+      const notes = await listDriveKeepMemos(token);
+      setKeepNotesList(notes);
+    } catch (error) {
+      console.error("Error fetching Keep memos:", error);
+    } finally {
+      setIsLoadingKeep(false);
+    }
+  };
+
+  const handleSaveToKeep = async (track: Track) => {
+    if (!googleToken) {
+      triggerToast("🔒 يجب ربط حساب غوغل أولاً لحفظ الملاحظات فوريًا في Keep!");
+      return;
+    }
+
+    const isConfirmed = window.confirm(
+      "هل تود حفظ كلمات ومؤثرات وميتا-داتا هذا المهرجان كمسودة منظمة داخل Google Keep لمزامنتها فوريًّا عبر أجهزتك؟"
+    );
+    if (!isConfirmed) return;
+
+    setIsSavingKeep(true);
+    setKeepSyncStatus("saving");
+    try {
+      await exportTrackToGoogleKeep(track, googleToken);
+      setKeepSyncStatus("synced");
+      triggerToast("📝 تم حفظ الكلمات ونوتات المهرجان وميتا داتا الأستوديو كمسودة Keep سحابية بنجاح!");
+      // Automatically refresh the keep list in UI
+      await fetchUserKeepNotes(googleToken);
+      
+      // Reset status indicator to idle after 5 seconds
+      setTimeout(() => {
+        setKeepSyncStatus("idle");
+      }, 5000);
+    } catch (error: any) {
+      console.error(error);
+      setKeepSyncStatus("error");
+      triggerToast(`⚠️ عذراً، حصل خلل أثناء تشغيل الخدمة: ${error.message || error}`);
+      setTimeout(() => {
+        setKeepSyncStatus("idle");
+      }, 4000);
+    } finally {
+      setIsSavingKeep(false);
+    }
+  };
+
+  const handleReadKeepNote = async (id: string) => {
+    if (!googleToken) return;
+    setActiveNoteId(id);
+    try {
+      const content = await fetchDriveKeepContent(id, googleToken);
+      setActiveNoteContent(content);
+    } catch (e: any) {
+      triggerToast(`⚠️ فشل تحميل محتوى المذكرة: ${e.message || e}`);
+    }
+  };
+
+  const handleDeleteKeepNote = async (id: string) => {
+    if (!googleToken) return;
+    const confirmed = window.confirm("هل أنت متأكد من رغبتك في حذف مسودة المهرجان هذه من Keep وسحابة Google؟");
+    if (!confirmed) return;
+
+    try {
+      await deleteDriveKeepMemo(id, googleToken);
+      triggerToast("🗑️ تم حذف مسودة المهرجان من السحاب بنجاح!");
+      if (activeNoteId === id) {
+        setActiveNoteId(null);
+        setActiveNoteContent(null);
+      }
+      // Refresh list
+      await fetchUserKeepNotes(googleToken);
+    } catch (e: any) {
+      triggerToast(`⚠️ فشل حذف المذكرة: ${e.message || e}`);
     }
   };
 
@@ -1102,11 +1198,32 @@ export default function App() {
                 <h3 className="text-lg font-black tracking-tight text-[#CCFF00]">مسرح الكلمات والموال المباشر</h3>
               </div>
               {selectedTrack && (
-                <div className="px-2.5 py-1 bg-zinc-900 border border-zinc-800 rounded font-bold text-xs text-[#00F0FF] flex items-center gap-1">
-                  <span>{selectedTrack.title}</span>
-                  <span className="text-[9px] bg-zinc-800 text-zinc-300 px-1.5 py-0.5 rounded uppercase">
-                    {selectedTrack.vocalStyleCategory || "Mahraganat"}
-                  </span>
+                <div className="flex items-center gap-2">
+                  {/* Animated Keep Sync status indicator */}
+                  {keepSyncStatus === "saving" && (
+                    <span className="px-2 py-0.5 bg-yellow-950/40 border border-yellow-500/40 text-yellow-500 font-extrabold text-[9px] rounded flex items-center gap-1 shadow-[0_0_8px_rgba(234,179,8,0.2)] animate-pulse" dir="rtl">
+                      <Loader2 className="w-2.5 h-2.5 animate-spin text-yellow-400" />
+                      <span>جاري حفظ كيب...</span>
+                    </span>
+                  )}
+                  {keepSyncStatus === "synced" && (
+                    <span className="px-2 py-0.5 bg-emerald-950/40 border border-emerald-500/40 text-emerald-400 font-extrabold text-[9px] rounded flex items-center gap-1 shadow-[0_0_8px_rgba(16,185,129,0.3)] animate-pulse" dir="rtl">
+                      <Check className="w-2.5 h-2.5 text-emerald-400" />
+                      <span>محفوظ بـ Keep ⚡</span>
+                    </span>
+                  )}
+                  {keepSyncStatus === "error" && (
+                    <span className="px-2 py-0.5 bg-red-950/40 border border-red-500/40 text-red-400 font-extrabold text-[9px] rounded flex items-center gap-1" dir="rtl">
+                      <span>فشل الحفظ ⚠️</span>
+                    </span>
+                  )}
+                  
+                  <div className="px-2.5 py-1 bg-zinc-900 border border-zinc-800 rounded font-bold text-xs text-[#00F0FF] flex items-center gap-1">
+                    <span>{selectedTrack.title}</span>
+                    <span className="text-[9px] bg-zinc-800 text-zinc-300 px-1.5 py-0.5 rounded uppercase">
+                      {selectedTrack.vocalStyleCategory || "Mahraganat"}
+                    </span>
+                  </div>
                 </div>
               )}
             </div>
@@ -1479,6 +1596,144 @@ export default function App() {
             </div>
           </div>
 
+          {/* GOOGLE KEEP BACKUP DRAFTS & LOCAL STORAGE RECOVERY HUB (NEW INTEGRATED SECTION) */}
+          <div className="bg-[#111] p-6 border-2 border-zinc-900 shadow-xl rounded-lg space-y-4 mt-4 text-right" dir="rtl">
+            <div className="flex flex-col sm:flex-row justify-between sm:items-center border-b border-zinc-855 pb-3 gap-2">
+              <div className="flex items-center gap-2">
+                <Bookmark className="w-5 h-5 text-yellow-500 animate-pulse" />
+                <h3 className="text-md sm:text-lg font-black text-yellow-500 tracking-tight">
+                  📝 مسودات وحافظة Google Keep للروقان السحابي
+                </h3>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-[9px] bg-yellow-500/10 text-yellow-500 px-2 py-0.5 border border-yellow-500/20 rounded font-mono font-bold">
+                  KEEP REMOTE COPIER v2.0
+                </span>
+                {googleToken && (
+                  <button
+                    onClick={() => fetchUserKeepNotes(googleToken)}
+                    disabled={isLoadingKeep}
+                    className="p-1.5 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-400 hover:text-[#CCFF00] rounded transition-all cursor-pointer"
+                    title="تحديث قائمة المسودات"
+                  >
+                    <RotateCcw className={`w-3.5 h-3.5 ${isLoadingKeep ? "animate-spin" : ""}`} />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {!googleToken ? (
+              <div className="p-6 bg-zinc-950/60 border border-zinc-900 text-center rounded flex flex-col items-center justify-center gap-3">
+                <div className="w-12 h-12 bg-yellow-500/10 rounded-full flex items-center justify-center text-yellow-500 border border-yellow-500/20">
+                  <Bookmark className="w-6 h-6" />
+                </div>
+                <div className="space-y-1">
+                  <p className="text-xs font-black text-zinc-300">مزامنة غوغل كيب غير متصلة الآن</p>
+                  <p className="text-[10px] text-zinc-500 max-w-sm leading-relaxed mx-auto">
+                    اربط حساب غوغل الخاص بك لتفعيل تصدير الكلمات والميتا-داتا المنظمة (BPM، المقامات، التوزيع الصوتي) فوريًّا لكيب ومزامنتها عبر الهاتف والأجهزة اللوحية!
+                  </p>
+                </div>
+                <button
+                  onClick={handleGoogleLogin}
+                  className="bg-yellow-500 hover:bg-yellow-400 text-black font-black text-xs px-4 py-2 rounded transition-all cursor-pointer shadow-md"
+                >
+                  ربط حسـاب غوغل فـوريًا 🔐
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <p className="text-[10.5px] text-zinc-400 leading-relaxed">
+                  هذه هي جلساتك الإبداعية المحفوظة سحابياً بنجاح داخل مفكرتك. يمكنك استعراض الكلمات الخام، والميتا داتا، ومخرج كل جملة موسيقية أو إدارتها ومسحها:
+                </p>
+
+                {isLoadingKeep ? (
+                  <div className="py-8 text-center flex flex-col justify-center items-center gap-2">
+                    <Loader2 className="w-6 h-6 animate-spin text-yellow-500" />
+                    <span className="text-xs text-zinc-500 font-mono">جاري جلب المفكرات من السحاب...</span>
+                  </div>
+                ) : keepNotesList.length === 0 ? (
+                  <div className="py-8 bg-zinc-900/30 border border-zinc-900 text-center rounded text-zinc-500 text-xs">
+                    لا يوجد مسودات منشأة بـ Keep حتى الآن. قم بالضغط على "حفظ الكلمات كمسودة سريعة" في المهايئ بالأسفل لبدء التخزين!
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {keepNotesList.map((note) => {
+                      const isSelected = activeNoteId === note.id;
+                      return (
+                        <div 
+                          key={note.id}
+                          className={`p-3 rounded-lg border text-right transition-all flex flex-col justify-between gap-3 ${
+                            isSelected 
+                              ? "bg-yellow-500/10 border-yellow-500/50 shadow-md shadow-yellow-500/5" 
+                              : "bg-zinc-900/40 hover:bg-zinc-900/80 border-zinc-850"
+                          }`}
+                        >
+                          <div className="space-y-1">
+                            <span className="text-xs font-black text-yellow-500 block truncate" title={note.name}>
+                              {note.name.replace("حفظ بـ Keep / تدوينة روقان:", "").trim() || "مسودة بدون عنوان"}
+                            </span>
+                            <span className="text-[9px] text-zinc-500 font-mono block">
+                              🕒 {note.createdTime ? new Date(note.createdTime).toLocaleString("ar-EG") : "تاريخ غير معروف"}
+                            </span>
+                          </div>
+
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => handleReadKeepNote(note.id)}
+                              className="flex-1 bg-zinc-950 hover:bg-zinc-900 border border-zinc-800 hover:border-yellow-500/30 text-yellow-500/90 text-[10px] font-bold py-1 px-2.5 rounded transition-all cursor-pointer"
+                            >
+                              {activeNoteId === note.id ? "معروضة حاليًا" : "عرض الكلمات والمسودة"}
+                            </button>
+                            <button
+                              onClick={() => handleDeleteKeepNote(note.id)}
+                              className="p-1 px-2 bg-zinc-950 hover:bg-rose-950 border border-zinc-800 hover:border-rose-900 text-zinc-500 hover:text-rose-400 rounded transition-all cursor-pointer"
+                              title="حذف من Keep وسحابة Google"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Keep Memo preview block detail */}
+                {activeNoteContent && (
+                  <div className="bg-yellow-950/15 border-r-4 border-yellow-500 p-4 rounded-lg text-yellow-400 space-y-2 mt-2 font-mono text-[11px] animate-fadeIn transition-all">
+                    <div className="flex justify-between items-center pb-2 border-b border-yellow-500/20">
+                      <span className="font-bold text-xs text-white">📋 محتوى الجلسة الإبداعية المسترجعة:</span>
+                      <button 
+                        onClick={() => {
+                          setActiveNoteContent(null);
+                          setActiveNoteId(null);
+                        }}
+                        className="text-[10px] text-zinc-400 hover:text-white px-2 py-0.5 bg-zinc-900 rounded"
+                      >
+                        إغلاق المعاينة [X]
+                      </button>
+                    </div>
+                    <pre className="whitespace-pre-wrap leading-relaxed overflow-y-auto text-zinc-300 font-mono max-h-64 text-[10px] text-right" dir="rtl">
+                      {activeNoteContent}
+                    </pre>
+
+                    <div className="pt-2 border-t border-yellow-500/20 flex justify-between items-center text-[9px] text-zinc-500 font-sans">
+                      <span>* هذه المذكرة آمنة ومزامنة مع تطبيق Keep على هاتفك.</span>
+                      <a 
+                        href="https://keep.google.com" 
+                        target="_blank" 
+                        rel="noopener noreferrer" 
+                        className="text-yellow-500 hover:underline font-bold"
+                      >
+                        فتح تطبيق Keep ويب ↗
+                      </a>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
           {/* DYNAMIC LYRIC SHEET ENGINE & EXTERNAL AI ADAPTOR PORTING (NEW FEATURE) */}
           {selectedTrack && (
             <div className="bg-[#111] p-6 border-2 border-zinc-900 shadow-xl rounded-lg space-y-6 mt-4">
@@ -1563,6 +1818,20 @@ export default function App() {
                     >
                       <Clipboard className="w-4 h-4 text-black" />
                       {copiedLyrics ? "تم نسخ النص بنجاح!" : "نسخ الكلمات كاملة بتنسيق هذا الموديل"}
+                    </button>
+
+                    <button
+                      onClick={() => handleSaveToKeep(selectedTrack)}
+                      disabled={isSavingKeep}
+                      className="bg-yellow-500 hover:bg-yellow-400 disabled:bg-zinc-800 disabled:text-zinc-500 text-black font-black p-3 text-xs flex items-center justify-center gap-1.5 transition-all rounded shadow cursor-pointer"
+                      title="حفظ الكلمات كمسودة سريعة في غوغل كيب لمزامنتها الفورية على كافة أجهزتك"
+                    >
+                      {isSavingKeep ? (
+                        <Loader2 className="w-4 h-4 animate-spin text-black" />
+                      ) : (
+                        <Bookmark className="w-4 h-4 text-black" />
+                      )}
+                      <span>{isSavingKeep ? "جاري مزامنة وحفظ الملاحظة..." : "حفظ الكلمات كمسودة سريعة في Google Keep 📝"}</span>
                     </button>
 
                     {/* Original lyrics sharing block - allows sharing original words to networks */}
