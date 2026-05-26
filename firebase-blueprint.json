@@ -1,0 +1,49 @@
+{
+  "entities": {
+    "Track": {
+      "title": "Track",
+      "description": "A generated Egyptian Shaabi/Mahraganat music track",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique identifier of the track" },
+        "title": { "type": "string", "description": "Title of the track" },
+        "bpm": { "type": "integer", "description": "Beats per minute" },
+        "rhythmStyle": { "type": "string", "description": "Type of Shaabi/Mahraganat rhythm" },
+        "vocalStyle": { "type": "string", "description": "Vocal style details" },
+        "vocalStyleCategory": { "type": "string", "enum": ["Mahraganat", "Shaabi", "Tarab", "Modern Pop"] },
+        "vibeTags": { "type": "array", "description": "Aesthetic instrument tags" },
+        "introductionBeat": { "type": "string", "description": "Vocal/beat opening cue text" },
+        "creator": { "type": "string", "description": "UID or name of creator user" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation server timestamp" },
+        "lines": {
+          "type": "array",
+          "description": "Line by line lyrics and effects"
+        }
+      },
+      "required": ["title", "bpm", "rhythmStyle", "vocalStyleCategory", "lines"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile with saved favorites and tracks history",
+      "type": "object",
+      "properties": {
+        "username": { "type": "string", "description": "Display name of the user" },
+        "email": { "type": "string", "description": "Verified Google or provider email of user" },
+        "favorites": { "type": "array", "description": "Array of favorited track IDs" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["username", "email", "favorites"]
+    }
+  },
+  "firestore": {
+    "/tracks/{trackId}": {
+      "schema": "Track",
+      "description": "Public database of all generated tracks and user remixes"
+    },
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "Private user profiles containing custom music library selections"
+    }
+  }
+}

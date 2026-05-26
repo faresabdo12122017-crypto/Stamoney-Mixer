@@ -1,0 +1,6 @@
+{
+  "name": "نظام ستاموني للموسيقى الشعبية",
+  "description": "منصة ذكية متكاملة لتوليد كلمات وألحان وإيقاعات المهرجانات والأغاني الشعبية المصرية بلمسة الشارع الأصيلة",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

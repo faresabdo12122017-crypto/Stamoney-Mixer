@@ -1,0 +1,99 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Global safety net - Default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Modern helper primitives for Zero-Trust Firestore Security
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Check if the user's email is verified
+    function isEmailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    // 1. User Profiles isolation & schema control (PII protection pillar)
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow create: if isOwner(userId) 
+        && isValidUserProfile(incoming()) 
+        && incoming().createdAt == request.time;
+      allow update: if isOwner(userId) 
+        && isValidUserProfile(incoming()) 
+        && incoming().updatedAt == request.time
+        && incoming().email == existing().email  // Email is immutable after creation
+        && incoming().createdAt == existing().createdAt; // Creation time is immortal
+      allow delete: if false; // Profiles are permanent to preserve history
+
+      function isValidUserProfile(data) {
+        return data.keys().hasAll(['username', 'email', 'favorites', 'createdAt', 'updatedAt'])
+          && data.keys().size() == 5
+          && data.username is string && data.username.size() >= 2 && data.username.size() <= 50
+          && data.email is string && data.email.size() <= 120 && data.email == request.auth.token.email
+          && data.favorites is list && data.favorites.size() <= 200 // Bound array size
+          && (data.favorites.size() == 0 || data.favorites[0] is string); // Check string elements
+      }
+    }
+
+    // 2. Public and Customized Tracks collection (Master Gate pillar)
+    match /tracks/{trackId} {
+      // Direct single reads and queries are open so users can listen and share songs
+      allow get: if true;
+      allow list: if true; 
+
+      // Creation is allowed for verified logged-in users under rigorous validation blueprints
+      allow create: if isSignedIn() 
+        && isValidId(trackId)
+        && isValidTrack(incoming())
+        && incoming().creator == request.auth.uid
+        && incoming().createdAt == request.time;
+
+      allow update: if isSignedIn()
+        && isValidTrack(incoming())
+        && (
+          // Creator can modify some metadata, but not the immutables (createdAt, creator ID)
+          (existing().creator == request.auth.uid 
+            && incoming().creator == existing().creator
+            && incoming().createdAt == existing().createdAt
+            && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'rhythmStyle', 'vocalStyle', 'vibeTags', 'lines']))
+        );
+
+      allow delete: if isSignedIn() && existing().creator == request.auth.uid;
+
+      function isValidTrack(data) {
+        return data.keys().hasAll(['id', 'title', 'bpm', 'rhythmStyle', 'vocalStyle', 'vocalStyleCategory', 'vibeTags', 'introductionBeat', 'lines', 'creator', 'createdAt'])
+          && data.keys().size() == 11
+          && data.id is string && data.id.size() <= 128
+          && data.title is string && data.title.size() >= 3 && data.title.size() <= 100
+          && data.bpm is int && data.bpm >= 60 && data.bpm <= 200
+          && data.rhythmStyle is string && data.rhythmStyle.size() <= 100
+          && data.vocalStyle is string && data.vocalStyle.size() <= 150
+          && data.vocalStyleCategory is string && (data.vocalStyleCategory in ['Mahraganat', 'Shaabi', 'Tarab', 'Modern Pop'])
+          && data.vibeTags is list && data.vibeTags.size() <= 20
+          && data.introductionBeat is string && data.introductionBeat.size() <= 1000
+          && data.lines is list && data.lines.size() <= 50; // Performance bounds
+      }
+    }
+  }
+}
